@@ -7,15 +7,17 @@ Description:
 
 Usage:
 
-     anomaly_detect_ts(x, max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
+     anomaly_detect_ts(x, granularity="day", max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
                       threshold="None", e_value=False, longterm=False, piecewise_median_period_weeks=2,
-                      plot=False, y_log=False, xlabel="", ylabel="count", title=None, verbose=False)
+                      verbose=False)
 
 Arguments:
 
        x: Time series as a two column data frame where the first column
           consists of the timestamps and the second column consists of
           the observations.
+
+granularity: Granularity for prediction. "day" "hr" or "min"
 
 max_anoms: Maximum number of anomalies that S-H-ESD will detect as a
           percentage of the data.
@@ -43,20 +45,6 @@ piecewise_median_period_weeks: The piecewise median time window as
           described in Vallis, Hochenbaum, and Kejariwal (2014).
           Defaults to 2.
 
-    plot: A flag indicating if a plot with both the time series and the
-          estimated anoms, indicated by circles, should also be
-          returned.
-
-   y_log: Apply log scaling to the y-axis. This helps with viewing
-          plots that have extremely large positive anomalies relative
-          to the rest of the data.
-
-  xlabel: X-axis label to be added to the output plot.
-
-  ylabel: Y-axis label to be added to the output plot.
-
-   title: Title for the output plot.
-
  verbose: Enable debug messages
 
 Details:
@@ -77,9 +65,6 @@ Value:
     anoms: Data frame containing timestamps, values, and optionally
           expected values.
 
-    plot: A graphical object if plotting was requested by the user. The
-          plot contains the estimated anomalies annotated on the input
-          time series.
      "threshold" Filter all negative anomalies and those anomalies
      whose magnitude is smaller than one of the specified thresholds
      which include: the median of the daily max values (med_max), the
@@ -93,14 +78,8 @@ Value:
      anoms: Data frame containing timestamps, values, and optionally
           expected values.
 
-     plot: A graphical object if plotting was requested by the user. The
-          plot contains the estimated anomalies annotated on the input
-          time series.
      One can save "anoms" to a file in the following fashion:
      write.csv(<return list name>[["anoms"]], file=<filename>)
-
-     One can save "plot" to a file in the following fashion:
-     ggsave(<filename>, plot=<return list name>[["plot"]])
 
 References:
 
@@ -117,12 +96,11 @@ See Also:
 
 Examples:
      # To detect all anomalies
-     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both", plot=True)
+     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both")
      # To detect only the anomalies on the last day, run the following:
-     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both", only_last="day", plot=True)
+     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both", only_last="day")
      # To detect only the anomalies on the last hr, run the following:
-     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both", only_last="hr", plot=True)
-
+     anomaly_detect_ts(raw_data, max_anoms=0.02, direction="both", only_last="hr")
 '''
 
 import numpy as np
@@ -131,51 +109,32 @@ import pandas as pd
 import datetime
 import statsmodels.api as sm
 
-def anomaly_detect_ts(x, max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
+def anomaly_detect_ts(x, granularity="day", max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
                       threshold=None, e_value=False, longterm=False, piecewise_median_period_weeks=2,
-                      plot=False, y_log=False, xlabel="", ylabel="count", title=None, verbose=False, dropna=False):
-
+                      verbose=False):
     # validation
     assert isinstance(x, pd.Series), 'Data must be a series(Pandas.Series)'
     assert x.values.dtype in [int, float], 'Values of the series must be number'
     assert x.index.dtype == np.dtype('datetime64[ns]'), 'Index of the series must be datetime'
     assert max_anoms <= 0.49 and max_anoms >= 0, 'max_anoms must be non-negative and less than 50% '
+    assert only_last != 'hr' or granularity != 'day', "only_last must be day with given granularity"
     assert direction in ['pos', 'neg', 'both'], 'direction options: pos | neg | both'
+    assert granularity in ['day', 'min', 'hr'], 'granularity options: day | hr | min'
     assert only_last in [None, 'day', 'hr'], 'only_last options: None | day | hr'
     assert threshold in [None, 'med_max', 'p95', 'p99'], 'threshold options: None | med_max | p95 | p99'
     assert piecewise_median_period_weeks >= 2, 'piecewise_median_period_weeks must be greater than 2 weeks'
+    assert max_anons > 0, 'must look for at least one anomaly'
+    if alpha < 0.01 or alpha > 0.1:
+        print('Warning: alpha is the statistical signifigance, and is usually between 0.01 and 0.1')
 
-    # conversion
-    title = '' if title is None else (title + ' : ')
-    data = x.sort_index()
-    # TODO...
-    # Allow x.index to be number, here we can convert it to datetime
-
-    # verbose
-    if verbose:
-        if max_anoms == 0:
-            print('0 max_anoms results in max_outliers being 0.')
-        if alpha < 0.01 or alpha > 0.1:
-            print('Warning: alpha is the statistical signifigance, and is usually between 0.01 and 0.1')
-
-    timediff = data.index[1] - data.index[0]
-    if timediff.days > 0:
-        num_days_per_line = 7
-        only_last = 'day' if only_last == 'hr' else only_last
+    if granularity == "day":
         period = 7
-        granularity = 'day'
-    elif timediff.seconds / 60 / 60 >= 1:
-        granularity = 'hr'
+    elif granularity == "hr":
         period = 24
-    elif timediff.seconds / 60 >= 1:
-        granularity = 'min'
+    elif granularity == "min":
         period = 1440
-    elif timediff.seconds > 0:
-        granularity = 'sec'
-        # Aggregate data to minutely if secondly
-        data = data.resample('60s', label='right').sum()
-    else:
-        granularity = 'ms'
+
+    data = x.sort_index()
 
     max_anoms = 1 / data.size if max_anoms < 1 / data.size else max_anoms
 
@@ -234,20 +193,13 @@ def anomaly_detect_ts(x, max_anoms=0.1, direction="pos", alpha=0.05, only_last=N
 
     # -- If only_last was set by the user, create subset of the data that represent the most recent day
     if only_last:
-        start_date = data.index[-1] - datetime.timedelta(days=7)
-        start_anoms = data.index[-1] - datetime.timedelta(days=1)
-
-        if granularity == 'day':
-            #TODO: This might be better set up top at the gran check
-            breaks = 3 * 12
-            num_days_per_line = 7
-        elif only_last == 'day':
-            breaks = 12
-        else:
+        if granularity == "hr":
             # We need to change start_date and start_anoms for the hourly only_last option
             start_date = datetime.datetime.combine((data.index[-1] - datetime.timedelta(days=2)).date(), datetime.time.min)
             start_anoms = data.index[-1] - datetime.timedelta(hours=1)
-            breaks = 3
+        else:
+            start_date = data.index[-1] - datetime.timedelta(days=7)
+            start_anoms = data.index[-1] - datetime.timedelta(days=1)
 
         # subset the last days worth of data
         x_subset_single_day = data.loc[data.index > start_anoms]
@@ -255,26 +207,14 @@ def anomaly_detect_ts(x, max_anoms=0.1, direction="pos", alpha=0.05, only_last=N
         x_subset_week = data.loc[lambda df: (df.index <= start_anoms) & (df.index > start_date)]
         all_anoms = all_anoms.loc[all_anoms.index >= x_subset_single_day.index[0]]
 
-    # If there are no anoms, then let's exit
     if all_anoms.empty:
-        if verbose:
-            print('No anomalies detected.')
-
         return {
             'anoms': pd.Series(),
-            'plot': None
         }
-
-    if plot:
-        num_days_per_line
-        breaks
-        x_subset_week
-        raise Exception('TODO: Unsupported now')
 
     return {
         'anoms': all_anoms,
         'expected': seasonal_plus_trend if e_value else None,
-        'plot': 'TODO' if plot else None
     }
 
 # Detects anomalies in a time series using S-H-ESD.
