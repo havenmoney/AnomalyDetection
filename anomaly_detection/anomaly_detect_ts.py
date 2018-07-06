@@ -123,7 +123,6 @@ def anomaly_detect_ts(x, granularity="day", max_anoms=0.1, direction="pos", alph
     assert only_last in [None, 'day', 'hr'], 'only_last options: None | day | hr'
     assert threshold in [None, 'med_max', 'p95', 'p99'], 'threshold options: None | med_max | p95 | p99'
     assert piecewise_median_period_weeks >= 2, 'piecewise_median_period_weeks must be greater than 2 weeks'
-    assert max_anons > 0, 'must look for at least one anomaly'
     if alpha < 0.01 or alpha > 0.1:
         print('Warning: alpha is the statistical signifigance, and is usually between 0.01 and 0.1')
 
