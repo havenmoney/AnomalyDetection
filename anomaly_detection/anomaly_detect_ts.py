@@ -109,9 +109,15 @@ import pandas as pd
 import datetime
 import statsmodels.api as sm
 
-def anomaly_detect_ts(x, granularity="day", max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
+def anomaly_detect_ts(x: pd.Series, granularity="day", max_anoms=0.1, direction="pos", alpha=0.05, only_last=None,
                       threshold=None, e_value=False, longterm=False, piecewise_median_period_weeks=2,
                       verbose=False):
+    if x.size == 0:
+        print('Warning: passed empty series for anomalies')
+        return {
+            'anoms': pd.Series(),
+        }
+
     # validation
     assert isinstance(x, pd.Series), 'Data must be a series(Pandas.Series)'
     assert x.values.dtype in [int, float], 'Values of the series must be number'
